@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slope Stability · yip-lgtm</title>
+<style>
+  :root { --bg: #f7f8fa; --card: #fff; --primary: #1a3a5c; --accent: #1e616b; --danger: #c0392b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: #222; }
+  header { background: var(--primary); color: #fff; padding: 16px 24px; }
+  header h1 { margin: 0; font-size: 20px; font-weight: 600; }
+  header p { margin: 4px 0 0; font-size: 13px; opacity: 0.85; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 20px; display: grid; grid-template-columns: 280px 1fr; gap: 16px; }
+  .card { background: var(--card); border-radius: 10px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+  label { display: block; font-size: 13px; margin: 10px 0 4px; font-weight: 500; }
+  input, select { width: 100%; padding: 7px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+  button { margin-top: 12px; width: 100%; padding: 10px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
+  button.secondary { background: #6c757d; }
+  button:hover { filter: brightness(1.08); }
+  canvas { width: 100%; height: 420px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafbfc; cursor: crosshair; }
+  .result { margin-top: 14px; padding: 12px; background: #eef6f7; border-radius: 6px; font-size: 14px; line-height: 1.5; }
+  .note { font-size: 12px; color: #666; margin-top: 10px; line-height: 1.4; }
+  .legend { font-size: 12px; margin-top: 8px; }
+  .legend div { margin: 3px 0; }
+  .legend span { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: middle; border-radius: 2px; }
+  .methods { margin-top: 16px; font-size: 13px; }
+  .methods table { width: 100%; border-collapse: collapse; }
+  .methods th, .methods td { border-bottom: 1px solid #eee; padding: 6px 4px; text-align: left; }
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #eee; }
+  .badge.rigorous { background: #d4edda; color: #155724; }
+  .badge.approx { background: #fff3cd; color: #856404; }
+  @media (max-width: 800px) { .container { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Slope Stability Analysis</h1>
+  <p>動態規劃搜尋非圓弧滑動面 · 簡易 Janbu 法 · 參考 SSA 介面</p>
+</header>
+
+<div class="container">
+  <div class="card">
+    <h3 style="margin-top:0">參數</h3>
+    <label>黏聚力 c′ (kPa)</label>
+    <input type="number" id="c" value="5" step="1">
+    <label>摩擦角 φ′ (°)</label>
+    <input type="number" id="phi" value="30" step="1">
+    <label>乾單位重 γ (kN/m³)</label>
+    <input type="number" id="gamma" value="18" step="0.5">
+    <label>飽和單位重 γsat (kN/m³)</label>
+    <input type="number" id="gammasat" value="20" step="0.5">
+    <label>地下水位深度 (m，自坡頂)</label>
+    <input type="number" id="gwl" value="4" step="0.5">
+    <button onclick="compute()">計算最危險滑動面</button>
+    <button class="secondary" onclick="loadExample()">載入範例</button>
+    <button class="secondary" onclick="reset()">重設</button>
+
+    <div class="legend">
+      <div><span style="background:#1a3a5c"></span>坡面</div>
+      <div><span style="background:#4a90d9"></span>地下水位</div>
+      <div><span style="background:#c0392b"></span>臨界滑動面</div>
+    </div>
+    <div class="note">點擊畫布新增坡面點（由左至右）。至少 3 點。</div>
+    <div class="result" id="result">尚未計算</div>
+
+    <div class="methods">
+      <h4 style="margin:14px 0 6px">方法比較</h4>
+      <table>
+        <tr><th>方法</th><th>平衡</th><th>狀態</th></tr>
+        <tr><td>Simplified Janbu</td><td>力</td><td><span class="badge approx">本頁實作</span></td></tr>
+        <tr><td>Bishop Simplified</td><td>力矩</td><td><span class="badge">pySlope</span></td></tr>
+        <tr><td>Spencer</td><td>力+力矩</td><td><span class="badge rigorous">OGR-Slip2D</span></td></tr>
+        <tr><td>Morgenstern-Price</td><td>力+力矩</td><td><span class="badge rigorous">OGR-Slip2D</span></td></tr>
+      </table>
+      <div class="note" style="margin-top:8px">
+        嚴格方法（Spencer / Morgenstern-Price）請用本地工具：<br>
+        <a href="https://github.com/samuelsl27/OGR-Slip2D" target="_blank">OGR-Slip2D</a> · 
+        <a href="https://github.com/JesseBonanno/PySlope" target="_blank">pySlope</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <canvas id="cv" width="760" height="420"></canvas>
+    <div class="note">
+      本頁為靜態示範（簡易 Janbu + DP）。正式提交請用 Slope/W 或 OGR-Slip2D 的 Spencer / Morgenstern-Price。
+      OGR-Slip2D 驗證誤差：Spencer ≈ +0.64%，Morgenstern-Price ≈ +0.53%。
+    </div>
+  </div>
+</div>
+
+<script>
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let points = [];
+const scale = 6, ox = 50, oz = 360;
+
+function toScreen(x, z) { return { x: ox + x * scale, y: oz - z * scale }; }
+function toReal(sx, sy) { return { x: (sx - ox) / scale, z: (oz - sy) / scale }; }
+
+function draw() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.strokeStyle = '#f0f0f0'; ctx.lineWidth = 1;
+  for (let i = 0; i < cv.width; i += 30) { ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,cv.height); ctx.stroke(); }
+  for (let j = 0; j < cv.height; j += 30) { ctx.beginPath(); ctx.moveTo(0,j); ctx.lineTo(cv.width,j); ctx.stroke(); }
+
+  if (points.length > 1) {
+    ctx.beginPath(); ctx.strokeStyle = '#1a3a5c'; ctx.lineWidth = 2.5;
+    points.forEach((p,i) => { const s = toScreen(p.x, p.z); i===0 ? ctx.moveTo(s.x,s.y) : ctx.lineTo(s.x,s.y); });
+    ctx.stroke();
+    points.forEach(p => { const s = toScreen(p.x,p.z); ctx.fillStyle='#1a3a5c'; ctx.beginPath(); ctx.arc(s.x,s.y,5,0,6.28); ctx.fill(); });
+  }
+
+  const gwl = +document.getElementById('gwl').value || 0;
+  if (points.length) {
+    const maxZ = Math.max(...points.map(p=>p.z));
+    const gwlZ = maxZ - gwl;
+    ctx.beginPath(); ctx.strokeStyle = '#4a90d9'; ctx.setLineDash([5,4]); ctx.lineWidth = 1.5;
+    ctx.moveTo(ox, oz - gwlZ * scale); ctx.lineTo(cv.width - 20, oz - gwlZ * scale); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function groundZ(x) {
+  for (let i = 0; i < points.length - 1; i++) {
+    if (x >= points[i].x && x <= points[i+1].x) {
+      const t = (x - points[i].x) / (points[i+1].x - points[i].x);
+      return points[i].z + t * (points[i+1].z - points[i].z);
+    }
+  }
+  return points.length ? points[points.length-1].z : 0;
+}
+
+function janbu(slip, c, phi, gamma, gammasat, gwlDepth) {
+  const phiR = phi * Math.PI / 180;
+  const maxZ = Math.max(...points.map(p=>p.z));
+  const gwlZ = maxZ - gwlDepth;
+  let Fs = 1.5;
+  for (let iter = 0; iter < 12; iter++) {
+    let sumA = 0, sumB = 0;
+    for (let i = 0; i < slip.length - 1; i++) {
+      const a = slip[i], b = slip[i+1];
+      const w = b.x - a.x; if (w <= 0) continue;
+      const midX = (a.x + b.x) / 2, midZ = (a.z + b.z) / 2;
+      const h = Math.max(0, groundZ(midX) - midZ);
+      const alpha = Math.atan2(b.z - a.z, w);
+      const L = Math.hypot(w, b.z - a.z);
+      let W = gamma * h * w, u = 0;
+      if (midZ < gwlZ) { u = 9.81 * (gwlZ - midZ); W = gammasat * h * w; }
+      const cosA = Math.cos(alpha);
+      const nAlpha = cosA * cosA * (1 + Math.tan(alpha) * Math.tan(phiR) / Fs);
+      const A = c * L * cosA + (W - u * L * cosA) * Math.tan(phiR) * Math.max(nAlpha, 0.15);
+      const B = W * Math.sin(alpha);
+      sumA += A; sumB += B;
+    }
+    if (sumB <= 0) return 99;
+    const newFs = sumA / sumB;
+    if (Math.abs(newFs - Fs) < 0.005) { Fs = newFs; break; }
+    Fs = newFs;
+  }
+  const d = Math.max(...slip.map(p => groundZ(p.x) - p.z), 0.1);
+  const Ltot = slip[slip.length-1].x - slip[0].x;
+  const f0 = Math.pow(50 * d / Math.max(Ltot, 1), 0.03);
+  return Fs * f0;
+}
+
+function compute() {
+  if (points.length < 3) { alert('請至少點擊 3 個點定義坡面'); return; }
+  const c = +document.getElementById('c').value;
+  const phi = +document.getElementById('phi').value;
+  const gamma = +document.getElementById('gamma').value;
+  const gammasat = +document.getElementById('gammasat').value;
+  const gwl = +document.getElementById('gwl').value;
+
+  const xmin = Math.min(...points.map(p=>p.x));
+  const xmax = Math.max(...points.map(p=>p.x));
+  const nS = 14, nSt = 9;
+  const stages = [];
+  for (let i = 0; i <= nS; i++) {
+    const x = xmin + (xmax - xmin) * i / nS;
+    const gz = groundZ(x);
+    const states = [];
+    for (let j = 1; j <= nSt; j++) states.push({ x, z: gz - gz * j / (nSt + 1), cost: Infinity, prev: -1 });
+    stages.push(states);
+  }
+  stages[0].forEach(s => s.cost = 0);
+
+  for (let i = 0; i < nS; i++) {
+    for (let a = 0; a < stages[i].length; a++) {
+      const sa = stages[i][a];
+      if (!isFinite(sa.cost)) continue;
+      for (let b = 0; b < stages[i+1].length; b++) {
+        const sb = stages[i+1][b];
+        if (sb.z > sa.z + 1) continue;
+        const Fs = janbu([sa, sb], c, phi, gamma, gammasat, gwl);
+        const gain = Fs < 90 ? 1 / Fs : 0;
+        const nc = sa.cost + gain;
+        if (nc < sb.cost) { sb.cost = nc; sb.prev = a; }
+      }
+    }
+  }
+
+  let best = -1, bestC = Infinity;
+  stages[nS].forEach((s, i) => { if (s.cost < bestC) { bestC = s.cost; best = i; } });
+  const path = [];
+  let idx = best;
+  for (let i = nS; i >= 0 && idx >= 0; i--) { path.push(stages[i][idx]); idx = stages[i][idx].prev; }
+  path.reverse();
+
+  const Fs = janbu(path, c, phi, gamma, gammasat, gwl);
+  draw();
+  ctx.beginPath(); ctx.strokeStyle = '#c0392b'; ctx.lineWidth = 2.5;
+  path.forEach((p,i) => { const s = toScreen(p.x, p.z); i===0 ? ctx.moveTo(s.x,s.y) : ctx.lineTo(s.x,s.y); });
+  ctx.stroke();
+
+  document.getElementById('result').innerHTML = `最小 Fs ≈ <b>${Fs.toFixed(2)}</b><br>滑動面點數：${path.length}<br><span style="font-size:12px;color:#666">簡易 Janbu（含 f₀ 修正）</span>`;
+}
+
+function loadExample() {
+  points = [{x:5,z:8},{x:25,z:8},{x:55,z:22},{x:90,z:22}];
+  draw();
+  document.getElementById('result').textContent = '已載入範例坡面';
+}
+
+function reset() { points = []; draw(); document.getElementById('result').textContent = '尚未計算'; }
+
+cv.addEventListener('click', e => {
+  const r = cv.getBoundingClientRect();
+  const sx = (e.clientX - r.left) * (cv.width / r.width);
+  const sy = (e.clientY - r.top) * (cv.height / r.height);
+  const real = toReal(sx, sy);
+  if (real.x < 0 || real.z < 0) return;
+  points.push(real);
+  points.sort((a,b) => a.x - b.x);
+  draw();
+});
+
+loadExample();
+</script>
+</body>
+</html>
